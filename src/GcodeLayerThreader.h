@@ -78,7 +78,7 @@ private:
     bool finished();
 
 private:
-    // algorithm paramters
+    // algorithm parameters
     const int start_item_argument_index; //!< The first index with which \ref GcodeLayerThreader::produce_item will be called
     const int end_item_argument_index; //!< The end index with which \ref GcodeLayerThreader::produce_item will not be called any more
     const unsigned int item_count; //!< The number of items to produce and consume
@@ -165,7 +165,7 @@ void GcodeLayerThreader<T>::consume(int item_idx)
     {
         assert(item_idx == last_consumed_idx + 1);
         last_consumed_idx = item_idx;
-        if (produced[last_consumed_idx + 1] && last_consumed_idx + 1 < end_item_argument_index - start_item_argument_index)
+        if (last_consumed_idx + 1 < end_item_argument_index - start_item_argument_index && produced[last_consumed_idx + 1])
         {
             assert(!to_be_consumed_item_idx && "The next produced item shouldn't already be noted as being consumable because of the lock!");
             to_be_consumed_item_idx = last_consumed_idx + 1;

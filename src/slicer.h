@@ -1,4 +1,4 @@
-/** Copyright (C) 2013 David Braam - Released under terms of the AGPLv3 License */
+/** Copyright (C) 2013 Ultimaker - Released under terms of the AGPLv3 License */
 #ifndef SLICER_H
 #define SLICER_H
 
@@ -6,6 +6,7 @@
 
 #include "mesh.h"
 #include "utils/polygon.h"
+#include "settings/AdaptiveLayerHeights.h"
 /*
     The Slicer creates layers of polygons from an optimized 3D model.
     The result of the Slicer is a list of polygons without any order or structure.
@@ -57,10 +58,11 @@ public:
      * Connect the segments into polygons for this layer of this \p mesh
      *
      * \param[in] mesh The mesh data for which we are connecting sliced segments (The face data is used)
-     * \param keepNoneClosed Whether to throw away the data for segments which we couldn't stitch into a polygon
-     * \param extensiveStitching Whether to perform extra work to try and close polylines into polygons when there are large gaps
+     * \param keep_none_closed Whether to throw away the data for segments which we couldn't stitch into a polygon
+     * \param extensive_stitching Whether to perform extra work to try and close polylines into polygons when there are large gaps
+     * \param is_initial_layer Whether this is the first layer of the mesh data
      */
-    void makePolygons(const Mesh* mesh, bool keepNoneClosed, bool extensiveStitching);
+    void makePolygons(const Mesh* mesh, bool keep_none_closed, bool extensive_stitching, bool is_initial_layer);
 
 protected:
     /*!
@@ -486,7 +488,8 @@ public:
 
     const Mesh* mesh = nullptr; //!< The sliced mesh
 
-    Slicer(Mesh* mesh, int initial, int thickness, int slice_layer_count, bool keepNoneClosed, bool extensiveStitching);
+    Slicer(Mesh* mesh, int initial_layer_thickness, int thickness, int slice_layer_count, bool keepNoneClosed,
+           bool extensiveStitching, bool use_variable_layer_heights, std::vector<AdaptiveLayer> *adaptive_layers);
 
     /*!
      * Linear interpolation

@@ -20,12 +20,12 @@ namespace cura
 struct ClosestPolygonPoint
 {
     Point location; //!< Result location
-    std::optional<ConstPolygonRef> poly; //!< Polygon in which the result was found (or none if no result was found)
+    ConstPolygonPointer poly; //!< Polygon in which the result was found (or nullptr if no result was found)
     unsigned int poly_idx; //!< The index of the polygon in some Polygons where ClosestPolygonPoint::poly can be found
     unsigned int point_idx; //!< Index to the first point in the polygon of the line segment on which the result was found
-    ClosestPolygonPoint(Point p, int pos, ConstPolygonRef poly) :  location(p), poly(true, poly), poly_idx(NO_INDEX), point_idx(pos) {};
-    ClosestPolygonPoint(Point p, int pos, ConstPolygonRef poly, int poly_idx) :  location(p), poly(true, poly), poly_idx(poly_idx), point_idx(pos) {};
-    ClosestPolygonPoint(ConstPolygonRef poly) : poly(true, poly), poly_idx(NO_INDEX), point_idx(NO_INDEX) {};
+    ClosestPolygonPoint(Point p, int pos, ConstPolygonRef poly) :  location(p), poly(poly), poly_idx(NO_INDEX), point_idx(pos) {};
+    ClosestPolygonPoint(Point p, int pos, ConstPolygonRef poly, int poly_idx) :  location(p), poly(poly), poly_idx(poly_idx), point_idx(pos) {};
+    ClosestPolygonPoint(ConstPolygonRef poly) : poly(poly), poly_idx(NO_INDEX), point_idx(NO_INDEX) {};
     ClosestPolygonPoint() : poly_idx(NO_INDEX), point_idx(NO_INDEX) {};
     Point p() const
     { // conformity with other classes
@@ -137,6 +137,24 @@ public:
     * \return The index to the polygon onto which we have moved the point.
     */
     static unsigned int moveInside(const Polygons& polygons, Point& from, int distance = 0, int64_t max_dist2 = std::numeric_limits<int64_t>::max());
+
+    /**
+     * \brief Moves the point \p from onto the nearest polygon or leaves the
+     * point as-is, when the comb boundary is not within the square root of \p
+     * max_dist2 distance.
+     *
+     * Given a \p distance more than zero, the point will end up inside, and
+     * conversely outside. When the point is already in/outside by more than \p
+     * distance, \p from is unaltered. When the point is in/outside by less than
+     * \p distance, \p is moved to the correct place.
+     * @param polygon The polygon onto which to move the point.
+     * @param from[in, out] The point to move.
+     * @param distance The distance by which to move the point.
+     * @param max_dist2 The squared maximal allowed distance from the point to
+     * the polygon.
+     * \return Always returns 0.
+     */
+    static unsigned int moveInside(const ConstPolygonRef polygon, Point& from, int distance = 0, int64_t max_dist2 = std::numeric_limits<int64_t>::max());
 
     /*!
      * Moves the point \p from onto the nearest polygon or leaves the point as-is, when the comb boundary is not within the root of \p max_dist2 distance.
@@ -267,7 +285,7 @@ public:
      * \param penalty_function A function returning a penalty term on the squared distance score of a candidate point.
      * \return The point on the polygon closest to \p from
      */
-    static ClosestPolygonPoint ensureInsideOrOutside(const Polygons& polygons, Point& from, ClosestPolygonPoint& closest_polygon_point, int preferred_dist_inside, const Polygons* loc_to_line_polygons = nullptr, const LocToLineGrid* loc_to_line_grid = nullptr, const std::function<int(Point)>& penalty_function = no_penalty_function);
+    static ClosestPolygonPoint ensureInsideOrOutside(const Polygons& polygons, Point& from, const ClosestPolygonPoint& closest_polygon_point, int preferred_dist_inside, const Polygons* loc_to_line_polygons = nullptr, const LocToLineGrid* loc_to_line_grid = nullptr, const std::function<int(Point)>& penalty_function = no_penalty_function);
 
     /*!
     * Find the two points in two polygons with the smallest distance.
@@ -487,6 +505,35 @@ public:
      * polygon(s)
      */
     static bool polygonCollidesWithLineSegment(const Polygons& polys, const Point& startPoint, const Point& endPoint);
+
+    /*!
+     * Checks whether two polygon groups intersect - does a BB hit check first and if that succeeds, the full intersection
+     *
+     * \param poly_a A polygon group
+     * \param poly_b Another polygon group
+     * \return true if \p poly_a and \p poly_b intersect, false otherwise
+     */
+    static bool polygonsIntersect(const ConstPolygonRef& poly_a, const ConstPolygonRef& poly_b);
+
+    /*!
+     * Checks whether two polygons are adjacent (closer than \p max_gap)
+     *
+     * \param[in] inner_poly A polygon whose vertices will be tested to see if they are closer than \p max_gap to one of the lines in \p outer_poly
+     * \param[in] outer_poly A polygon
+     * \param[in] max_gap Polygons must be closer together than this distance to be considered adjacent.
+     * \return true if a vertex in \p inner_poly is sufficiently close to a line in \p outer_poly, false otherwise
+     */
+    static bool polygonOutlinesAdjacent(const ConstPolygonRef inner_poly, const ConstPolygonRef outer_poly, const coord_t max_gap);
+
+    /*!
+     * Searches \p possible_adjacent_polys for polygons that are closer to \p poly than \p max_gap. The indices of adjacent polygons are stored in \p adjacent_poly_indices.
+     *
+     * \param[out] adjacent_poly_indices A vector that will contain the indices of the polygons that are adjacent to \p poly.
+     * \param[in] poly The polygon that we are testing adjacency to.
+     * \param[in] possible_adjacent_polys The vector of polygons we are testing.
+     * \param[in] max_gap Polygons must be closer together than this distance to be considered adjacent.
+     */
+    static void findAdjacentPolygons(std::vector<unsigned>& adjacent_poly_indices, const ConstPolygonRef& poly, const std::vector<ConstPolygonPointer>& possible_adjacent_polys, const coord_t max_gap);
 
 private:
     /*!

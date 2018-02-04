@@ -174,7 +174,7 @@ void Wireframe2gcode::writeGCode()
 
     
 void Wireframe2gcode::go_down(WeaveConnectionPart& part, unsigned int segment_idx)
-{ 
+{
     WeaveConnectionSegment& segment = part.connection.segments[segment_idx];
     Point3 from = (segment_idx == 0)? part.connection.from : part.connection.segments[segment_idx - 1].to;
     if (go_back_to_last_top)
@@ -251,7 +251,6 @@ void Wireframe2gcode::strategy_retract(WeaveConnectionPart& part, unsigned int s
     bool after_retract_hop = false;
     //bool go_horizontal_first = true;
     bool lower_retract_start = true;
-    
     
     Point3& to = segment.to;
     if (lower_retract_start)
@@ -498,6 +497,8 @@ Wireframe2gcode::Wireframe2gcode(Weaver& weaver, GCodeExport& gcode, SettingsBas
     extrusion_mm3_per_mm_connection = line_area * flowConnection / 100.0;
     extrusion_mm3_per_mm_flat = line_area * flowFlat / 100.0;
 
+    update_extrusion_offset = false;
+
     nozzle_outer_diameter = getSettingInMicrons("machine_nozzle_tip_outer_diameter"); // ___       ___   .
     nozzle_head_distance = getSettingInMicrons("machine_nozzle_head_distance");      //    |     |      .
     nozzle_expansion_angle = getSettingInAngleRadians("machine_nozzle_expansion_angle");  //     \_U_/       .
@@ -538,7 +539,7 @@ Wireframe2gcode::Wireframe2gcode(Weaver& weaver, GCodeExport& gcode, SettingsBas
     
     
     standard_retraction_config.distance = getSettingInMillimeters("retraction_amount");
-    standard_retraction_config.prime_volume = getSettingInCubicMillimeters("retraction_extra_prime_amount");
+    standard_retraction_config.prime_volume = std::max(0.0, getSettingInCubicMillimeters("retraction_extra_prime_amount"));
     standard_retraction_config.speed = getSettingInMillimetersPerSecond("retraction_retract_speed");
     standard_retraction_config.primeSpeed = getSettingInMillimetersPerSecond("retraction_prime_speed");
     standard_retraction_config.zHop = getSettingInMicrons("retraction_hop");
@@ -549,13 +550,16 @@ Wireframe2gcode::Wireframe2gcode(Weaver& weaver, GCodeExport& gcode, SettingsBas
 
 void Wireframe2gcode::processStartingCode()
 {
+    int start_extruder_nr = getSettingAsIndex("adhesion_extruder_nr");
+
     if (!CommandSocket::isInstantiated())
     {
-        std::string prefix = gcode.getFileHeader();
+        std::vector<bool> extruder_is_used;
+        extruder_is_used.resize(getSettingAsCount("machine_extruder_count"), false);
+        extruder_is_used[start_extruder_nr] = true;
+        std::string prefix = gcode.getFileHeader(extruder_is_used);
         gcode.writeCode(prefix.c_str());
     }
-
-    int start_extruder_nr = getSettingAsIndex("adhesion_extruder_nr");
 
     gcode.writeComment("Generated with Cura_SteamEngine " VERSION);
 
@@ -628,7 +632,7 @@ void Wireframe2gcode::processSkirt()
         for (unsigned int point_idx = 0; point_idx < poly.size(); point_idx++)
         {
             Point& p = poly[(point_idx + order.polyStart[poly_idx] + 1) % poly.size()];
-            gcode.writeExtrusion(p, getSettingInMillimetersPerSecond("skirt_brim_speed"), getSettingInMillimeters("skirt_brim_line_width") * INT2MM(initial_layer_thickness), PrintFeatureType::SkirtBrim);
+            gcode.writeExtrusion(p, getSettingInMillimetersPerSecond("skirt_brim_speed"), getSettingInMillimeters("skirt_brim_line_width") * getSettingAsRatio("initial_layer_line_width_factor") * INT2MM(initial_layer_thickness), PrintFeatureType::SkirtBrim);
         }
     }
 }
