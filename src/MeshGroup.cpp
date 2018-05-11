@@ -5,6 +5,7 @@
 #include <string.h>
 #include <strings.h>
 #include <stdio.h>
+#include <limits>
 
 #include "MeshGroup.h"
 #include "utils/gettime.h"
@@ -93,10 +94,14 @@ Point3 MeshGroup::min() const
     {
         return Point3(0, 0, 0);
     }
-    Point3 ret = meshes[0].min();
-    for(unsigned int i=1; i<meshes.size(); i++)
+    Point3 ret(std::numeric_limits<int32_t>::max(), std::numeric_limits<int32_t>::max(), std::numeric_limits<int32_t>::max());
+    for (const Mesh& mesh : meshes)
     {
-        Point3 v = meshes[i].min();
+        if (mesh.getSettingBoolean("infill_mesh") || mesh.getSettingBoolean("cutting_mesh") || mesh.getSettingBoolean("anti_overhang_mesh")) //Don't count pieces that are not printed.
+        {
+            continue;
+        }
+        Point3 v = mesh.min();
         ret.x = std::min(ret.x, v.x);
         ret.y = std::min(ret.y, v.y);
         ret.z = std::min(ret.z, v.z);
@@ -110,10 +115,14 @@ Point3 MeshGroup::max() const
     {
         return Point3(0, 0, 0);
     }
-    Point3 ret = meshes[0].max();
-    for(unsigned int i=1; i<meshes.size(); i++)
+    Point3 ret(std::numeric_limits<int32_t>::min(), std::numeric_limits<int32_t>::min(), std::numeric_limits<int32_t>::min());
+    for (const Mesh& mesh : meshes)
     {
-        Point3 v = meshes[i].max();
+        if (mesh.getSettingBoolean("infill_mesh") || mesh.getSettingBoolean("cutting_mesh") || mesh.getSettingBoolean("anti_overhang_mesh")) //Don't count pieces that are not printed.
+        {
+            continue;
+        }
+        Point3 v = mesh.max();
         ret.x = std::max(ret.x, v.x);
         ret.y = std::max(ret.y, v.y);
         ret.z = std::max(ret.z, v.z);
