@@ -1,11 +1,11 @@
-//Copyright (c) 2017 Ultimaker B.V.
+//Copyright (c) 2018 Ultimaker B.V.
 //CuraEngine is released under the terms of the AGPLv3 or higher.
 
 #include "sliceDataStorage.h"
 
 #include "FffProcessor.h" //To create a mesh group with if none is provided.
 #include "infill/SubDivCube.h" // For the destructor
-#include "infill/SpaceFillingTreeFill.h" // for destructor
+#include "infill/DensityProvider.h" // for destructor
 
 
 namespace cura
@@ -14,18 +14,17 @@ namespace cura
 SupportStorage::SupportStorage()
 : generated(false)
 , layer_nr_max_filled_layer(-1)
-, cross_fill_patterns()
+, cross_fill_provider(nullptr)
 {
 }
 
 SupportStorage::~SupportStorage()
 {
-    supportLayers.clear();
-    for(SpaceFillingTreeFill* cross_fill_pattern : cross_fill_patterns)
+    supportLayers.clear(); 
+    if (cross_fill_provider)
     {
-        delete cross_fill_pattern;
+        delete cross_fill_provider;
     }
-    cross_fill_patterns.clear();
 }
 
 Polygons& SliceLayerPart::getOwnInfillArea()
@@ -71,26 +70,30 @@ void SliceLayer::getOutlines(Polygons& result, bool external_polys_only) const
     }
 }
 
-Polygons SliceLayer::getSecondOrInnermostWalls() const
-{
-    Polygons ret;
-    getSecondOrInnermostWalls(ret);
-    return ret;
-}
-
-void SliceLayer::getSecondOrInnermostWalls(Polygons& layer_walls) const
+void SliceLayer::getInnermostWalls(Polygons& layer_walls, int max_inset) const
 {
     for (const SliceLayerPart& part : parts)
     {
-        // we want the 2nd inner walls
-        if (part.insets.size() >= 2) {
-            layer_walls.add(part.insets[1]);
-            continue;
-        }
-        // but we'll also take the inner wall if the 2nd doesn't exist
-        if (part.insets.size() == 1) {
-            layer_walls.add(part.insets[0]);
-            continue;
+        switch (max_inset) {
+            case 1:
+                // take the inner wall
+                if (part.insets.size() >= 1) {
+                    layer_walls.add(part.insets[0]);
+                    continue;
+                }
+                break;
+            case 2:
+            default:
+                // we want the 2nd inner walls
+                if (part.insets.size() >= 2) {
+                    layer_walls.add(part.insets[1]);
+                    continue;
+                }
+                // but we'll also take the inner wall if the 2nd doesn't exist
+                if (part.insets.size() == 1) {
+                    layer_walls.add(part.insets[0]);
+                    continue;
+                }
         }
         // offset_from_outlines was so large that it completely destroyed our isle,
         // so we'll just use the regular outline
@@ -99,12 +102,13 @@ void SliceLayer::getSecondOrInnermostWalls(Polygons& layer_walls) const
     }
 }
 
-SliceMeshStorage::SliceMeshStorage(Mesh* mesh, unsigned int slice_layer_count)
+SliceMeshStorage::SliceMeshStorage(SliceDataStorage* p_slice_data_storage, Mesh* mesh, unsigned int slice_layer_count)
 : SettingsMessenger(mesh)
+, p_slice_data_storage(p_slice_data_storage)
 , layer_nr_max_filled_layer(0)
 , bounding_box(mesh->getAABB())
 , base_subdiv_cube(nullptr)
-, cross_fill_patterns()
+, cross_fill_provider(nullptr)
 {
     layers.resize(slice_layer_count);
 }
@@ -115,11 +119,10 @@ SliceMeshStorage::~SliceMeshStorage()
     {
         delete base_subdiv_cube;
     }
-    for (SpaceFillingTreeFill* cross_fill_pattern : cross_fill_patterns)
+    if (cross_fill_provider)
     {
-        delete cross_fill_pattern;
+        delete cross_fill_provider;
     }
-    cross_fill_patterns.clear();
 }
 
 bool SliceMeshStorage::getExtruderIsUsed(int extruder_nr) const
@@ -268,6 +271,11 @@ bool SliceMeshStorage::getExtruderIsUsed(int extruder_nr, int layer_nr) const
     return false;
 }
 
+bool SliceMeshStorage::isPrinted() const
+{
+    return !getSettingBoolean("infill_mesh") && !getSettingBoolean("cutting_mesh") && !getSettingBoolean("anti_overhang_mesh");
+}
+
 Point SliceMeshStorage::getZSeamHint() const
 {
     Point pos(getSettingInMicrons("z_seam_x"), getSettingInMicrons("z_seam_y"));
@@ -294,6 +302,15 @@ SliceDataStorage::SliceDataStorage(MeshGroup* meshgroup) : SettingsMessenger(mes
     max_print_height_second_to_last_extruder(-1),
     primeTower(*this)
 {
+    Point3 machine_max(getSettingInMicrons("machine_width"), getSettingInMicrons("machine_depth"), getSettingInMicrons("machine_height"));
+    Point3 machine_min(0, 0, 0);
+    if (getSettingBoolean("machine_center_is_zero"))
+    {
+        machine_max /= 2;
+        machine_min -= machine_max;
+    }
+    machine_size.include(machine_min);
+    machine_size.include(machine_max);
 }
 
 Polygons SliceDataStorage::getLayerOutlines(int layer_nr, bool include_helper_parts, bool external_polys_only) const
@@ -325,6 +342,7 @@ Polygons SliceDataStorage::getLayerOutlines(int layer_nr, bool include_helper_pa
     else 
     {
         Polygons total;
+        coord_t maximum_resolution = std::numeric_limits<coord_t>::max();
         if (layer_nr >= 0)
         {
             for (const SliceMeshStorage& mesh : meshes)
@@ -339,6 +357,7 @@ Polygons SliceDataStorage::getLayerOutlines(int layer_nr, bool include_helper_pa
                 {
                     total = total.unionPolygons(layer.openPolyLines.offsetPolyLine(100));
                 }
+                maximum_resolution = std::min(maximum_resolution, mesh.getSettingInMicrons("meshfix_maximum_resolution"));
             }
         }
         if (include_helper_parts)
@@ -355,9 +374,10 @@ Polygons SliceDataStorage::getLayerOutlines(int layer_nr, bool include_helper_pa
             }
             if (primeTower.enabled)
             {
-                total.add(primeTower.ground_poly);
+                total.add(primeTower.inner_poly);
             }
         }
+        total.simplify(maximum_resolution, maximum_resolution);
         return total;
     }
 }
@@ -383,7 +403,7 @@ Polygons SliceDataStorage::getLayerSecondOrInnermostWalls(int layer_nr, bool inc
             for (const SliceMeshStorage& mesh : meshes)
             {
                 const SliceLayer& layer = mesh.layers[layer_nr];
-                layer.getSecondOrInnermostWalls(total);
+                layer.getInnermostWalls(total, 2);
                 if (mesh.getSettingAsSurfaceMode("magic_mesh_surface_mode") != ESurfaceMode::NORMAL)
                 {
                     total = total.unionPolygons(layer.openPolyLines.offsetPolyLine(100));
@@ -404,7 +424,7 @@ Polygons SliceDataStorage::getLayerSecondOrInnermostWalls(int layer_nr, bool inc
             }
             if (primeTower.enabled)
             {
-                total.add(primeTower.ground_poly);
+                total.add(primeTower.inner_poly);
             }
         }
         return total;
@@ -422,7 +442,7 @@ std::vector<bool> SliceDataStorage::getExtrudersUsed() const
     {
         ret[getSettingAsIndex("adhesion_extruder_nr")] = true;
         { // process brim/skirt
-            for (int extr_nr = 0; extr_nr < meshgroup->getExtruderCount(); extr_nr++)
+            for (unsigned int extr_nr = 0; extr_nr < meshgroup->getExtruderCount(); extr_nr++)
             {
                 if (skirt_brim[extr_nr].size() > 0)
                 {
@@ -496,7 +516,7 @@ std::vector<bool> SliceDataStorage::getExtrudersUsed(int layer_nr) const
     {
         ret[getSettingAsIndex("adhesion_extruder_nr")] = true;
         { // process brim/skirt
-            for (int extr_nr = 0; extr_nr < meshgroup->getExtruderCount(); extr_nr++)
+            for (unsigned int extr_nr = 0; extr_nr < meshgroup->getExtruderCount(); extr_nr++)
             {
                 if (skirt_brim[extr_nr].size() > 0)
                 {
@@ -553,7 +573,7 @@ std::vector<bool> SliceDataStorage::getExtrudersUsed(int layer_nr) const
     return ret;
 }
 
-bool SliceDataStorage::getExtruderPrimeBlobEnabled(int extruder_nr) const
+bool SliceDataStorage::getExtruderPrimeBlobEnabled(const unsigned int extruder_nr) const
 {
     if (extruder_nr >= meshgroup->getExtruderCount())
     {

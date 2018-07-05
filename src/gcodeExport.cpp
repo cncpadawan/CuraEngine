@@ -176,6 +176,12 @@ std::string GCodeExport::getFileHeader(const std::vector<bool>& extruder_is_used
             prefix << ";PRINT.TIME:" << static_cast<int>(*print_time) << new_line;
         }
 
+        if (total_bounding_box.min.x > total_bounding_box.max.x) //We haven't encountered any movement (yet). This probably means we're command-line slicing.
+        {
+            //Put some small default in there.
+            total_bounding_box.min = Point3(0, 0, 0);
+            total_bounding_box.max = Point3(10, 10, 10);
+        }
         prefix << ";PRINT.SIZE.MIN.X:" << INT2MM(total_bounding_box.min.x) << new_line;
         prefix << ";PRINT.SIZE.MIN.Y:" << INT2MM(total_bounding_box.min.y) << new_line;
         prefix << ";PRINT.SIZE.MIN.Z:" << INT2MM(total_bounding_box.min.z) << new_line;
@@ -197,7 +203,23 @@ std::string GCodeExport::getFileHeader(const std::vector<bool>& extruder_is_used
         }
         else if (flavor == EGCodeFlavor::REPRAP || flavor == EGCodeFlavor::MARLIN)
         {
-            prefix << ";Filament used: " << ((filament_used.size() >= 1)? filament_used[0] / (1000 * extruder_attr[0].filament_area) : 0) << "m" << new_line;
+            prefix << ";Filament used: ";
+            if (filament_used.size() > 0)
+            {
+                for (unsigned i = 0; i < filament_used.size(); ++i)
+                {
+                    if (i > 0)
+                    {
+                        prefix << ", ";
+                    }
+                    prefix << filament_used[i] / (1000 * extruder_attr[i].filament_area) << "m";
+                }
+            }
+            else
+            {
+                prefix << "0m";
+            }
+            prefix << new_line;
             prefix << ";Layer height: " << layer_height << new_line;
         }
     }
@@ -497,21 +519,18 @@ void GCodeExport::writeExtrusionMode(bool set_relative_extrusion_mode)
 
 void GCodeExport::resetExtrusionValue()
 {
-    if (flavor != EGCodeFlavor::MAKERBOT && flavor != EGCodeFlavor::BFB)
+    if (!relative_extrusion)
     {
-        if (!relative_extrusion)
-        {
-            *output_stream << "G92 " << extruder_attr[current_extruder].extruderCharacter << "0" << new_line;
-        }
-        double current_extruded_volume = getCurrentExtrudedVolume();
-        extruder_attr[current_extruder].totalFilament += current_extruded_volume;
-        for (double& extruded_volume_at_retraction : extruder_attr[current_extruder].extruded_volume_at_previous_n_retractions)
-        { // update the extruded_volume_at_previous_n_retractions only of the current extruder, since other extruders don't extrude the current volume
-            extruded_volume_at_retraction -= current_extruded_volume;
-        }
-        current_e_value = 0.0;
-        extruder_attr[current_extruder].retraction_e_amount_at_e_start = extruder_attr[current_extruder].retraction_e_amount_current;
+        *output_stream << "G92 " << extruder_attr[current_extruder].extruderCharacter << "0" << new_line;
     }
+    double current_extruded_volume = getCurrentExtrudedVolume();
+    extruder_attr[current_extruder].totalFilament += current_extruded_volume;
+    for (double& extruded_volume_at_retraction : extruder_attr[current_extruder].extruded_volume_at_previous_n_retractions)
+    { // update the extruded_volume_at_previous_n_retractions only of the current extruder, since other extruders don't extrude the current volume
+        extruded_volume_at_retraction -= current_extruded_volume;
+    }
+    current_e_value = 0.0;
+    extruder_attr[current_extruder].retraction_e_amount_at_e_start = extruder_attr[current_extruder].retraction_e_amount_current;
 }
 
 void GCodeExport::writeDelay(double timeAmount)
@@ -735,7 +754,7 @@ void GCodeExport::writeUnretractionAndPrime()
         { // note that BFB is handled differently
             *output_stream << "G11" << new_line;
             //Assume default UM2 retraction settings.
-            if (prime_volume > 0)
+            if (prime_volume != 0)
             {
                 *output_stream << "G1 F" << PrecisionedDouble{1, extruder_attr[current_extruder].last_retraction_prime_speed * 60} << " " << extruder_attr[current_extruder].extruderCharacter << PrecisionedDouble{5, current_e_value} << new_line;
                 currentSpeed = extruder_attr[current_extruder].last_retraction_prime_speed;
@@ -750,13 +769,13 @@ void GCodeExport::writeUnretractionAndPrime()
             currentSpeed = extruder_attr[current_extruder].last_retraction_prime_speed;
             estimateCalculator.plan(TimeEstimateCalculator::Position(INT2MM(currentPosition.x), INT2MM(currentPosition.y), INT2MM(currentPosition.z), eToMm(current_e_value)), currentSpeed, PrintFeatureType::MoveRetraction);
         }
-        if (getCurrentExtrudedVolume() > 10000.0) //According to https://github.com/Ultimaker/CuraEngine/issues/14 having more then 21m of extrusion causes inaccuracies. So reset it every 10m, just to be sure.
+        if (getCurrentExtrudedVolume() > 10000.0 && flavor != EGCodeFlavor::BFB && flavor != EGCodeFlavor::MAKERBOT) //According to https://github.com/Ultimaker/CuraEngine/issues/14 having more then 21m of extrusion causes inaccuracies. So reset it every 10m, just to be sure.
         {
             resetExtrusionValue();
         }
         extruder_attr[current_extruder].retraction_e_amount_current = 0.0;
     }
-    else if (prime_volume > 0.0)
+    else if (prime_volume != 0.0)
     {
         const double output_e = (relative_extrusion)? prime_volume_e : current_e_value;
         *output_stream << "G1 F" << PrecisionedDouble{1, extruder_attr[current_extruder].last_retraction_prime_speed * 60} << " " << extruder_attr[current_extruder].extruderCharacter;
@@ -911,7 +930,7 @@ void GCodeExport::startExtruder(int new_extruder)
     CommandSocket::setExtruderForSend(new_extruder);
     CommandSocket::setSendCurrentPosition( getPositionXY() );
 
-    //Change the Z position so it gets re-writting again. We do not know if the switch code modified the Z position.
+    //Change the Z position so it gets re-written again. We do not know if the switch code modified the Z position.
     currentPosition.z += 1;
 }
 
@@ -992,7 +1011,7 @@ void GCodeExport::writePrimeTrain(double travel_speed)
 
 void GCodeExport::writeFanCommand(double speed)
 {
-    if (currentFanSpeed == speed)
+    if (std::abs(currentFanSpeed - speed) < 0.1)
         return;
     if (speed > 0)
     {

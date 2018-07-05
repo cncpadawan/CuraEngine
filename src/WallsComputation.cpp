@@ -1,4 +1,6 @@
-/** Copyright (C) 2013 Ultimaker - Released under terms of the AGPLv3 License */
+//Copyright (c) 2018 Ultimaker B.V.
+//CuraEngine is released under the terms of the AGPLv3 or higher.
+
 #include "WallsComputation.h"
 #include "utils/polygonUtils.h"
 namespace cura {
@@ -34,12 +36,41 @@ void WallsComputation::generateInsets(SliceLayerPart* part)
         if (i == 0)
         {
             part->insets[0] = part->outline.offset(-line_width_0 / 2 - wall_0_inset);
-        } else if (i == 1)
+        }
+        else if (i == 1)
         {
             part->insets[1] = part->insets[0].offset(-line_width_0 / 2 + wall_0_inset - line_width_x / 2);
-        } else
+        }
+        else
         {
-            part->insets[i] = part->insets[i-1].offset(-line_width_x);
+            part->insets[i] = part->insets[i - 1].offset(-line_width_x);
+        }
+
+        const size_t inset_part_count = part->insets[i].size();
+        constexpr size_t minimum_part_saving = 3; //Only try if the part has more pieces than the previous inset and saves at least this many parts.
+        constexpr coord_t try_smaller = 10; //How many micrometres to inset with the try with a smaller inset.
+        if (inset_part_count > minimum_part_saving + 1 && (i == 0 || (i > 0 && inset_part_count > part->insets[i - 1].size() + minimum_part_saving)))
+        {
+            //Try a different line thickness and see if this fits better, based on these criteria:
+            // - There are fewer parts to the polygon (fits better in slim areas).
+            // - The polygon area is largely unaffected.
+            Polygons alternative_inset;
+            if (i == 0)
+            {
+                alternative_inset = part->outline.offset(-(line_width_0 - try_smaller) / 2 - wall_0_inset);
+            }
+            else if (i == 1)
+            {
+                alternative_inset = part->insets[0].offset(-(line_width_0 - try_smaller) / 2 + wall_0_inset - line_width_x / 2);
+            }
+            else
+            {
+                alternative_inset = part->insets[i - 1].offset(-(line_width_x - try_smaller));
+            }
+            if (alternative_inset.size() < inset_part_count - minimum_part_saving) //Significantly fewer parts (saves more than 3 parts).
+            {
+                part->insets[i] = alternative_inset;
+            }
         }
 
         //Finally optimize all the polygons. Every point removed saves time in the long run.

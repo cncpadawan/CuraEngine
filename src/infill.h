@@ -1,5 +1,4 @@
-//Copyright (c) 2013 Ultimaker
-//Copyright (c) 2017 Ultimaker B.V.
+//Copyright (c) 2018 Ultimaker B.V.
 //CuraEngine is released under the terms of the AGPLv3 or higher.
 
 #ifndef INFILL_H
@@ -10,8 +9,8 @@
 #include "infill/ZigzagConnectorProcessor.h"
 #include "infill/NoZigZagConnectorProcessor.h"
 #include "infill/SubDivCube.h"
-#include "infill/SpaceFillingTreeFill.h"
-#include "utils/intpoint.h"
+#include "infill/DensityProvider.h"
+#include "utils/IntPoint.h"
 #include "utils/AABB.h"
 
 namespace cura
@@ -37,7 +36,6 @@ class Infill
     bool use_endpieces; //!< (ZigZag) Whether to include endpieces: zigzag connector segments from one infill line to itself
     bool skip_some_zags;  //!< (ZigZag) Whether to skip some zags
     int zag_skip_count;  //!< (ZigZag) To skip one zag in every N if skip some zags is enabled
-    bool apply_pockets_alternatingly; //!< Whether to add pockets to the cross 3d pattern only at half the intersections of the fractal
     coord_t pocket_size; //!< The size of the pockets at the intersections of the fractal in the cross 3d pattern
     coord_t minimum_zag_line_length; //!< Throw away perimeters that are too small
 
@@ -54,20 +52,19 @@ public:
     Infill(EFillMethod pattern
         , bool zig_zaggify
         , const Polygons& in_outline
-        , int outline_offset
-        , int infill_line_width
-        , int line_distance
-        , int infill_overlap
+        , coord_t outline_offset
+        , coord_t infill_line_width
+        , coord_t line_distance
+        , coord_t infill_overlap
         , double fill_angle
-        , int64_t z
-        , int64_t shift
+        , coord_t z
+        , coord_t shift
         , const Point& infill_origin = Point()
         , Polygons* perimeter_gaps = nullptr
         , bool connected_zigzags = false
         , bool use_endpieces = false
         , bool skip_some_zags = false
         , int zag_skip_count = 0
-        , bool apply_pockets_alternatingly = false
         , coord_t pocket_size = 0
         , coord_t minimum_zag_line_length = DEFAULT_MINIMUM_LINE_LENGTH_THRESHOLD
     )
@@ -87,7 +84,6 @@ public:
     , use_endpieces(use_endpieces)
     , skip_some_zags(skip_some_zags)
     , zag_skip_count(zag_skip_count)
-    , apply_pockets_alternatingly(apply_pockets_alternatingly)
     , pocket_size(pocket_size)
     , minimum_zag_line_length(minimum_zag_line_length)
     {
@@ -99,15 +95,108 @@ public:
      * \param result_polygons (output) The resulting polygons (from concentric infill)
      * \param result_lines (output) The resulting line segments (from linear infill types)
      * \param mesh The mesh for which to generate infill (should only be used for non-helper objects)
-     * \param[in] cross_fill_pattern Where the cross fractal precomputation is stored
+     * \param[in] cross_fill_provider The cross fractal subdivision decision functor
      */
-    void generate(Polygons& result_polygons, Polygons& result_lines, const SpaceFillingTreeFill* cross_fill_pattern = nullptr, const SliceMeshStorage* mesh = nullptr);
+    void generate(Polygons& result_polygons, Polygons& result_lines, const SierpinskiFillProvider* cross_fill_provider = nullptr, const SliceMeshStorage* mesh = nullptr);
 
 private:
+    struct InfillLineSegment
+    {
+        /*!
+         * Creates a new infill line segment.
+         *
+         * The previous and next line segments will not yet be connected. You
+         * have to set those separately.
+         * \param start Where the line segment starts.
+         * \param end Where the line segment ends.
+         */
+        InfillLineSegment(const Point start, const size_t start_segment, const size_t start_polygon, const Point end, const size_t end_segment, const size_t end_polygon)
+            : start(start)
+            , start_segment(start_segment)
+            , start_polygon(start_polygon)
+            , end(end)
+            , end_segment(end_segment)
+            , end_polygon(end_polygon)
+            , previous(nullptr)
+            , next(nullptr)
+        {
+        };
+
+        /*!
+         * Where the line segment starts.
+         */
+        Point start;
+
+        /*!
+         * Which polygon line segment the start of this infill line belongs to.
+         *
+         * This is an index of a vertex in the PolygonRef that this infill line
+         * is inside. It is used to disambiguate between the start and end of
+         * the line segment.
+         */
+        size_t start_segment;
+
+        /*!
+         * Which polygon the start of this infill line belongs to.
+         *
+         * This is an index of a PolygonRef that this infill line
+         * is inside. It is used to know which polygon the start segment belongs to.
+         */
+        size_t start_polygon;
+
+        /*!
+         * Where the line segment ends.
+         */
+        Point end;
+
+        /*!
+         * Which polygon line segment the end of this infill line belongs to.
+         *
+         * This is an index of a vertex in the PolygonRef that this infill line
+         * is inside. It is used to disambiguate between the start and end of
+         * the line segment.
+         */
+        size_t end_segment;
+
+        /*!
+         * Which polygon the end of this infill line belongs to.
+         *
+         * This is an index of a PolygonRef that this infill line
+         * is inside. It is used to know which polygon the end segment belongs to.
+         */
+        size_t end_polygon;
+
+        /*!
+         * The previous line segment that this line segment is connected to, if
+         * any.
+         */
+        InfillLineSegment* previous;
+
+        /*!
+         * The next line segment that this line segment is connected to, if any.
+         */
+        InfillLineSegment* next;
+
+        /*!
+         * Compares two infill line segments for equality.
+         *
+         * This is necessary for putting line segments in a hash set.
+         * \param other The line segment to compare this line segment with.
+         */
+        bool operator ==(const InfillLineSegment& other) const;
+    };
+
+    /*!
+     * Stores the infill lines (a vector) for each line of a polygon (a vector)
+     * for each polygon in a Polygons object that we create a zig-zaggified
+     * infill pattern for.
+     */
+    std::vector<std::vector<std::vector<InfillLineSegment*>>> crossings_on_line;
+
     /*!
      * Generate sparse concentric infill
      * 
-     * Also adds \ref Inifll::perimeter_gaps between \ref Infill::in_outline and the first wall
+     * Also adds \ref Infill::perimeter_gaps between \ref Infill::in_outline and the first wall
      * 
      * \param result (output) The resulting polygons
      * \param inset_value The offset between each consecutive two polygons
@@ -183,11 +272,11 @@ private:
 
     /*!
      * Generate a 3d pattern of subdivided cubes on their points
-     * \param[in] cross_fill_pattern Where the cross fractal precomputation is stored
+     * \param[in] cross_fill_provider Where the cross fractal precomputation is stored
      * \param[out] result_polygons The resulting polygons
      * \param[out] result_lines The resulting lines
      */
-    void generateCrossInfill(const SpaceFillingTreeFill& cross_fill_pattern, Polygons& result_polygons, Polygons& result_lines);
+    void generateCrossInfill(const SierpinskiFillProvider& cross_fill_provider, Polygons& result_polygons, Polygons& result_lines);
 
     /*!
      * Convert a mapping from scanline to line_segment-scanline-intersections (\p cut_list) into line segments, using the even-odd rule
@@ -296,6 +385,16 @@ private:
      * \return the distance the infill pattern should be shifted
      */
     int64_t getShiftOffsetFromInfillOriginAndRotation(const double& infill_rotation);
+
+    /*!
+     * Connects infill lines together so that they form polylines.
+     *
+     * In most cases it will end up with only one long line that is more or less
+     * optimal. The lines are connected on their ends by extruding along the
+     * border of the infill area, similar to the zigzag pattern.
+     * \param[in/out] result_lines The lines to connect together.
+     */
+    void connectLines(Polygons& result_lines);
 };
 
 }//namespace cura

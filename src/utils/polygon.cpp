@@ -10,6 +10,16 @@
 namespace cura 
 {
 
+size_t ConstPolygonRef::size() const
+{
+    return path->size();
+}
+
+bool ConstPolygonRef::empty() const
+{
+    return path->empty();
+}
+
 bool ConstPolygonRef::shorterThan(int64_t check_length) const
 {
     const ConstPolygonRef& polygon = *this;
@@ -286,8 +296,8 @@ Polygons ConstPolygonRef::offset(int distance, ClipperLib::JoinType join_type, d
     return ret;
 }
 
-void PolygonRef::simplify(int smallest_line_segment_squared, int allowed_error_distance_squared){
-
+void PolygonRef::simplify(int smallest_line_segment_squared, int allowed_error_distance_squared)
+{
     if (size() < 3)
     {
         clear();

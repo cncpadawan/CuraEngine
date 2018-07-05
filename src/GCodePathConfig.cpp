@@ -1,6 +1,8 @@
-/** Copyright (C) 2016 Ultimaker - Released under terms of the AGPLv3 License */
+//Copyright (c) 2018 Ultimaker B.V.
+//CuraEngine is released under the terms of the AGPLv3 or higher.
 
-#include "utils/intpoint.h" // INT2MM
+
+#include "utils/IntPoint.h" // INT2MM
 #include "GCodePathConfig.h"
 
 namespace cura 
@@ -13,18 +15,22 @@ GCodePathConfig::GCodePathConfig(const GCodePathConfig& other)
 , layer_thickness(other.layer_thickness)
 , flow(other.flow)
 , extrusion_mm3_per_mm(other.extrusion_mm3_per_mm)
+, is_bridge_path(other.is_bridge_path)
+, fan_speed(other.fan_speed)
 {
 }
 
 
 
-GCodePathConfig::GCodePathConfig(PrintFeatureType type, int line_width, int layer_height, double flow, GCodePathConfig::SpeedDerivatives speed_derivatives)
+GCodePathConfig::GCodePathConfig(PrintFeatureType type, int line_width, int layer_height, double flow, GCodePathConfig::SpeedDerivatives speed_derivatives, bool is_bridge_path, double fan_speed)
 : type(type)
 , speed_derivatives(speed_derivatives)
 , line_width(line_width)
 , layer_thickness(layer_height)
 , flow(flow)
 , extrusion_mm3_per_mm(calculateExtrusion())
+, is_bridge_path(is_bridge_path)
+, fan_speed(fan_speed)
 {
 }
 
@@ -74,6 +80,16 @@ const PrintFeatureType& GCodePathConfig::getPrintFeatureType() const
 bool GCodePathConfig::isTravelPath() const
 {
     return line_width == 0;
+}
+
+bool GCodePathConfig::isBridgePath() const
+{
+    return is_bridge_path;
+}
+
+double GCodePathConfig::getFanSpeed() const
+{
+    return fan_speed;
 }
 
 double GCodePathConfig::getFlowPercentage() const
