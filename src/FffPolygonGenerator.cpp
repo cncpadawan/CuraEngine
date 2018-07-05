@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <map> // multimap (ordered map allowing duplicate keys)
+#include <fstream> // ifstream.good()
 
 #ifdef _OPENMP
     #include <omp.h>
@@ -24,7 +25,9 @@
 #include "SkirtBrim.h"
 #include "skin.h"
 #include "infill/SpaghettiInfill.h"
-#include "infill/SpaceFillingTreeFill.h"
+#include "infill/DensityProvider.h"
+#include "infill/ImageBasedDensityProvider.h"
+#include "infill/UniformDensityProvider.h"
 #include "infill.h"
 #include "raft.h"
 #include "progress/Progress.h"
@@ -200,7 +203,7 @@ bool FffPolygonGenerator::sliceModel(MeshGroup* meshgroup, TimeKeeper& timeKeepe
         Mesh& mesh = storage.meshgroup->meshes[meshIdx];
 
         // always make a new SliceMeshStorage, so that they have the same ordering / indexing as meshgroup.meshes
-        storage.meshes.emplace_back(&meshgroup->meshes[meshIdx], slicer->layers.size()); // new mesh in storage had settings from the Mesh
+        storage.meshes.emplace_back(&storage, &meshgroup->meshes[meshIdx], slicer->layers.size()); // new mesh in storage had settings from the Mesh
         SliceMeshStorage& meshStorage = storage.meshes.back();
 
         // only create layer parts for normal meshes
@@ -316,7 +319,7 @@ void FffPolygonGenerator::slices2polygons(SliceDataStorage& storage, TimeKeeper&
 
     AreaSupport::generateOverhangAreas(storage);
     AreaSupport::generateSupportAreas(storage);
-    TreeSupport tree_support_generator;
+    TreeSupport tree_support_generator(storage);
     tree_support_generator.generateSupportAreas(storage);
 
     // we need to remove empty layers after we have processed the insets
@@ -337,6 +340,7 @@ void FffPolygonGenerator::slices2polygons(SliceDataStorage& storage, TimeKeeper&
     computePrintHeightStatistics(storage);
 
     // handle helpers
+    storage.primeTower.generateGroundpoly(storage);
     storage.primeTower.generatePaths(storage);
     storage.primeTower.subtractFromSupport(storage);
 
@@ -527,7 +531,6 @@ void FffPolygonGenerator::processPerimeterGaps(SliceDataStorage& storage)
             const ExtruderTrain& train_wall_x = *storage.meshgroup->getExtruderTrain(mesh.getSettingAsExtruderNr("wall_x_extruder_nr"));
             bool fill_gaps_between_inner_wall_and_skin_or_infill =
                 mesh.getSettingInMicrons("infill_line_distance") > 0
-                && !mesh.getSettingBoolean("infill_hollow")
                 && mesh.getSettingInMicrons("infill_overlap_mm") >= 0
                 && !(mesh.getSettingAsFillMethod("infill_pattern") == EFillMethod::CONCENTRIC
                     && (mesh.getSettingBoolean("alternate_extra_perimeter") || (layer_nr == 0 && train_wall_x.getSettingInPercentage("initial_layer_line_width_factor") > 100))
@@ -680,6 +683,11 @@ void FffPolygonGenerator::processDerivedWallsSkinInfill(SliceMeshStorage& mesh)
     }
     else
     {
+        if (mesh.getSettingBoolean("infill_support_enabled"))
+        {// create gradual infill areas
+            SkinInfillAreaComputation::generateInfillSupport(mesh);
+        }
+
         // create gradual infill areas
         SkinInfillAreaComputation::generateGradualInfill(mesh, mesh.getSettingInMicrons("gradual_infill_step_height"), mesh.getSettingAsCount("gradual_infill_steps"));
 
@@ -696,9 +704,19 @@ void FffPolygonGenerator::processDerivedWallsSkinInfill(SliceMeshStorage& mesh)
                 || mesh.getSettingAsFillMethod("infill_pattern") == EFillMethod::CROSS_3D)
         )
         {
-            for (unsigned int gradual_step = 0; gradual_step <= (unsigned int)mesh.getSettingAsCount("gradual_infill_steps"); gradual_step++)
+            std::string cross_subdisivion_spec_image_file = mesh.getSettingString("cross_infill_density_image");
+            std::ifstream cross_fs(cross_subdisivion_spec_image_file.c_str());
+            if (cross_subdisivion_spec_image_file != "" && cross_fs.good())
             {
-                mesh.cross_fill_patterns.push_back(new SpaceFillingTreeFill(mesh.getSettingInMicrons("infill_line_distance") << gradual_step, mesh.bounding_box));
+                mesh.cross_fill_provider = new SierpinskiFillProvider(mesh.bounding_box, mesh.getSettingInMicrons("infill_line_distance"), mesh.getSettingInMicrons("infill_line_width"), cross_subdisivion_spec_image_file);
+            }
+            else
+            {
+                if (cross_subdisivion_spec_image_file != "" && cross_subdisivion_spec_image_file != " ")
+                {
+                    logError("Cannot find density image \'%s\'.", cross_subdisivion_spec_image_file.c_str());
+                }
+                mesh.cross_fill_provider = new SierpinskiFillProvider(mesh.bounding_box, mesh.getSettingInMicrons("infill_line_distance"), mesh.getSettingInMicrons("infill_line_width"));
             }
         }
 
@@ -743,8 +761,7 @@ void FffPolygonGenerator::processInsets(const SliceDataStorage& storage, SliceMe
         }
         bool recompute_outline_based_on_outer_wall = (mesh.getSettingBoolean("support_enable") || mesh.getSettingBoolean("support_tree_enable")) && !mesh.getSettingBoolean("fill_outline_gaps");
         bool remove_parts_with_no_insets = !mesh.getSettingBoolean("fill_outline_gaps");
-        const bool try_line_thickness = mesh.getSettingBoolean("wall_try_line_thickness");
-        WallsComputation walls_computation(mesh.getSettingInMicrons("wall_0_inset"), line_width_0, line_width_x, inset_count, recompute_outline_based_on_outer_wall, remove_parts_with_no_insets, try_line_thickness);
+        WallsComputation walls_computation(mesh.getSettingInMicrons("wall_0_inset"), line_width_0, line_width_x, inset_count, recompute_outline_based_on_outer_wall, remove_parts_with_no_insets);
         walls_computation.generateInsets(layer);
     }
     else
@@ -769,6 +786,10 @@ bool FffPolygonGenerator::isEmptyLayer(SliceDataStorage& storage, const unsigned
     }
     for (SliceMeshStorage& mesh : storage.meshes)
     {
+        if (layer_idx >= mesh.layers.size())
+        {
+            continue;
+        }
         SliceLayer& layer = mesh.layers[layer_idx];
         if (mesh.getSettingAsSurfaceMode("magic_mesh_surface_mode") != ESurfaceMode::NORMAL && layer.openPolyLines.size() > 0)
         {
@@ -999,7 +1020,8 @@ void FffPolygonGenerator::processFuzzyWalls(SliceMeshStorage& mesh)
     int64_t avg_dist_between_points = mesh.getSettingInMicrons("magic_fuzzy_skin_point_dist");
     int64_t min_dist_between_points = avg_dist_between_points * 3 / 4; // hardcoded: the point distance may vary between 3/4 and 5/4 the supplied value
     int64_t range_random_point_dist = avg_dist_between_points / 2;
-    for (unsigned int layer_nr = 0; layer_nr < mesh.layers.size(); layer_nr++)
+    unsigned int start_layer_nr = (mesh.getSettingAsPlatformAdhesion("adhesion_type") == EPlatformAdhesion::BRIM)? 1 : 0; // don't make fuzzy skin on first layer if there's a brim
+    for (unsigned int layer_nr = start_layer_nr; layer_nr < mesh.layers.size(); layer_nr++)
     {
         SliceLayer& layer = mesh.layers[layer_nr];
         for (SliceLayerPart& part : layer.parts)

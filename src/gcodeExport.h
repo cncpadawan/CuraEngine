@@ -1,4 +1,6 @@
-/** Copyright (C) 2013 Ultimaker - Released under terms of the AGPLv3 License */
+//Copyright (c) 2018 Ultimaker B.V.
+//CuraEngine is released under the terms of the AGPLv3 or higher.
+
 #ifndef GCODEEXPORT_H
 #define GCODEEXPORT_H
 
@@ -7,7 +9,7 @@
 #include <sstream> // for stream.str()
 
 #include "settings/settings.h"
-#include "utils/intpoint.h"
+#include "utils/IntPoint.h"
 #include "utils/NoCopy.h"
 #include "timeEstimate.h"
 #include "MeshGroup.h"
@@ -125,7 +127,7 @@ private:
     int isZHopped; //!< The amount by which the print head is currently z hopped, or zero if it is not z hopped. (A z hop is used during travel moves to avoid collision with other layer parts)
 
     int current_extruder;
-    int currentFanSpeed;
+    double currentFanSpeed;
     EGCodeFlavor flavor;
 
     std::vector<double> total_print_times; //!< The total estimated print time in seconds for each feature

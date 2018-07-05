@@ -1,10 +1,10 @@
-//Copyright (c) 2017 Ultimaker B.V.
+//Copyright (c) 2018 Ultimaker B.V.
 //CuraEngine is released under the terms of the AGPLv3 or higher.
 
 #ifndef SLICE_DATA_STORAGE_H
 #define SLICE_DATA_STORAGE_H
 
-#include "utils/intpoint.h"
+#include "utils/IntPoint.h"
 #include "utils/optional.h"
 #include "utils/polygon.h"
 #include "utils/NoCopy.h"
@@ -15,7 +15,7 @@
 #include "TopSurface.h"
 #include "gcodeExport.h" // CoastingConfig
 #include "SupportInfillPart.h"
-#include "utils/SpaceFillingTree.h"
+#include "infill/SierpinskiFillProvider.h"
 
 namespace cura 
 {
@@ -172,16 +172,10 @@ public:
 
     /*!
      * Collects the second wall of every part, or the outer wall if it has no second, or the outline, if it has no outer wall.
-     * \return The collection of all polygons thus obtained
-     */
-    Polygons getSecondOrInnermostWalls() const;
-
-    /*!
-     * Collects the second wall of every part, or the outer wall if it has no second, or the outline, if it has no outer wall.
      * Add those polygons to @p result.
      * \param result The result: the collection of all polygons thus obtained
      */
-    void getSecondOrInnermostWalls(Polygons& result) const;
+    void getInnermostWalls(Polygons& result, int max_inset) const;
 
     ~SliceLayer();
 };
@@ -218,7 +212,7 @@ public:
     int layer_nr_max_filled_layer; //!< the layer number of the uppermost layer with content
 
     std::vector<SupportLayer> supportLayers;
-    std::vector<SpaceFillingTreeFill*> cross_fill_patterns; //!< the fractal patterns for the cross (3d) filling pattern, one for each gradual support step.
+    SierpinskiFillProvider* cross_fill_provider; //!< the fractal pattern for the cross (3d) filling pattern
 
     SupportStorage();
     ~SupportStorage();
@@ -230,6 +224,7 @@ class SubDivCube; // forward declaration to prevent dependency loop
 class SliceMeshStorage : public SettingsMessenger // passes on settings from a Mesh object
 {
 public:
+    SliceDataStorage *p_slice_data_storage;
     std::vector<SliceLayer> layers;
 
     int layer_nr_max_filled_layer; //!< the layer number of the uppermost layer with content (modified while infill meshes are processed)
@@ -243,9 +238,9 @@ public:
     AABB3D bounding_box; //!< the mesh's bounding box
 
     SubDivCube* base_subdiv_cube;
-    std::vector<SpaceFillingTreeFill*> cross_fill_patterns; //!< the fractal patterns for the cross (3d) filling pattern, one for each gradual infill step.
+    SierpinskiFillProvider* cross_fill_provider; //!< the fractal pattern for the cross (3d) filling pattern
 
-    SliceMeshStorage(Mesh* mesh, unsigned int slice_layer_count);
+    SliceMeshStorage(SliceDataStorage* p_slice_data_storage, Mesh* mesh, unsigned int slice_layer_count);
 
     virtual ~SliceMeshStorage();
 
@@ -283,6 +278,7 @@ public:
     size_t print_layer_count; //!< The total number of layers (except the raft and filler layers)
 
     Point3 model_size, model_min, model_max;
+    AABB3D machine_size; //!< The bounding box with the width, height and depth of the printer.
     std::vector<SliceMeshStorage> meshes;
 
     std::vector<RetractionConfig> retraction_config_per_extruder; //!< Retraction config per extruder.
@@ -364,7 +360,7 @@ public:
      * \param extruder_nr the extruder number to check.
      * \return a bool indicating whether prime blob is enabled for the given extruder number.
      */
-    bool getExtruderPrimeBlobEnabled(int extruder_nr) const;
+    bool getExtruderPrimeBlobEnabled(const unsigned int extruder_nr) const;
 
 private:
     /*!

@@ -1,4 +1,6 @@
-/** Copyright (C) 2016 Ultimaker - Released under terms of the AGPLv3 License */
+//Copyright (c) 2018 Ultimaker B.V.
+//CuraEngine is released under the terms of the AGPLv3 or higher.
+
 #ifndef SETTINGS_SETTINGS_H
 #define SETTINGS_SETTINGS_H
 
@@ -8,6 +10,7 @@
 #include <sstream>
 
 #include "../utils/floatpoint.h"
+#include "../utils/string.h"
 
 #include "../FlowTempGraph.h"
 
@@ -173,6 +176,12 @@ enum class FillPerimeterGapMode
     EVERYWHERE
 };
 
+enum class BuildPlateShape
+{
+    RECTANGULAR,
+    ELLIPTIC
+};
+
 enum class CombingMode
 {
     OFF,
@@ -283,6 +292,7 @@ public:
     EZSeamCornerPrefType getSettingAsZSeamCornerPrefType(std::string key) const;
     ESurfaceMode getSettingAsSurfaceMode(std::string key) const;
     FillPerimeterGapMode getSettingAsFillPerimeterGapMode(std::string key) const;
+    BuildPlateShape getSettingAsBuildPlateShape(const std::string& key) const;
     CombingMode getSettingAsCombingMode(std::string key) const;
     SupportDistPriority getSettingAsSupportDistPriority(std::string key) const;
     SlicingTolerance getSettingAsSlicingTolerance(std::string key) const;
@@ -327,7 +337,7 @@ public:
         {
             if (!pair.second.empty())
             {
-                sstream << " -s " << pair.first << "=\"" << pair.second << "\"";
+                sstream << " -s " << pair.first << "=\"" << Escaped{pair.second.c_str()} << '\"';
             }
         }
         return sstream.str();
